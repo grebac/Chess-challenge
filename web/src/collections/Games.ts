@@ -20,7 +20,27 @@ const guardChanges: CollectionBeforeChangeHook<Game> = async ({
 }) => {
   const user = req.user
   // Pas d'utilisateur = appel interne (Local API sans req.user) ; privilégié = admin ou service.
-  if (!user || isPrivileged(user)) return data
+  if (!user || isPrivileged(user)) {
+    // Même pour un admin : une acceptation sans couleurs assignées donnerait une partie que le
+    // service realtime ne peut pas charger (« Partie introuvable »). On les fixe donc ici aussi.
+    if (
+      operation === 'update' &&
+      originalDoc?.status === 'pending' &&
+      data.status === 'accepted' &&
+      !relRaw(data.whitePlayer ?? originalDoc.whitePlayer) &&
+      !relRaw(data.blackPlayer ?? originalDoc.blackPlayer)
+    ) {
+      const hostRaw = relRaw(originalDoc.host)!
+      const opponentRaw = relRaw(originalDoc.opponent)!
+      const hostIsWhite = resolveHostColor(originalDoc.hostColor) === 'white'
+      return {
+        ...data,
+        whitePlayer: hostIsWhite ? hostRaw : opponentRaw,
+        blackPlayer: hostIsWhite ? opponentRaw : hostRaw,
+      } as Partial<Game>
+    }
+    return data
+  }
 
   const uid = String(user.id)
 
