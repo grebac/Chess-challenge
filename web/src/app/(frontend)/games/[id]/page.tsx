@@ -3,8 +3,10 @@ import { notFound, redirect } from 'next/navigation'
 
 import { GameClient } from '@/components/GameClient'
 import { Header } from '@/components/Header'
-import { isAdmin } from '@/lib/access'
+import { WaitingForOpponent } from '@/components/WaitingForOpponent'
+import { isAdmin, relId } from '@/lib/access'
 import { STATUS_LABELS } from '@/lib/chess'
+import { listPlayers, namesById } from '@/lib/data'
 import { getSession } from '@/lib/session'
 import type { Game } from '@/payload-types'
 
@@ -33,25 +35,32 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
   }
 
   const playable = game.status === 'accepted' || game.status === 'active' || game.status === 'finished'
+  const waitingHost = game.status === 'pending' && relId(game.host) === String(user.id)
+
+  let content
+  if (playable) {
+    // Les deux ids passent en string : ce sont les clés de room côté realtime.
+    content = <GameClient gameId={String(game.id)} meId={String(user.id)} />
+  } else if (waitingHost) {
+    const names = namesById(await listPlayers(payload))
+    content = <WaitingForOpponent gameId={game.id} opponentName={names[relId(game.opponent)!] ?? 'ton adversaire'} />
+  } else {
+    content = (
+      <div className="space-y-3 text-sm">
+        <p className="text-stone-300">
+          Cette partie n’est pas jouable : {(STATUS_LABELS[game.status] ?? game.status).toLowerCase()}.
+        </p>
+        <Link href="/dashboard" className="text-amber-400 underline-offset-4 hover:underline">
+          Retour à mes défis et parties
+        </Link>
+      </div>
+    )
+  }
 
   return (
     <>
-      <Header name={user.displayName} isAdmin={isAdmin(user)} />
-      <main className="mx-auto max-w-5xl px-4 py-6">
-        {playable ? (
-          // Les deux ids passent en string : ce sont les clés de room côté realtime.
-          <GameClient gameId={String(game.id)} meId={String(user.id)} />
-        ) : (
-          <div className="space-y-3 text-sm">
-            <p className="text-stone-300">
-              Cette partie n’est pas jouable : {(STATUS_LABELS[game.status] ?? game.status).toLowerCase()}.
-            </p>
-            <Link href="/dashboard" className="text-amber-400 underline-offset-4 hover:underline">
-              Retour à mes défis et parties
-            </Link>
-          </div>
-        )}
-      </main>
+      <Header name={user.displayName} isAdmin={isAdmin(user)} guest={user.role === 'guest'} />
+      <main className="mx-auto max-w-5xl px-4 py-6">{content}</main>
     </>
   )
 }

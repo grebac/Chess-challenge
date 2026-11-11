@@ -6,13 +6,36 @@ import { relId } from './access'
 export interface Player {
   id: User['id']
   name: string
+  role: User['role']
 }
 
-/** Tous les joueurs (hors compte de service), pour le formulaire de défi et l'affichage des noms. */
+/**
+ * Tous les comptes utilisables dans l'interface (hors compte de service), invités compris :
+ * sert à retrouver le nom de n'importe quel adversaire. Pour proposer des adversaires à défier,
+ * passer par `challengeablePlayers` (qui écarte les invités).
+ */
 export async function listPlayers(payload: Payload): Promise<Player[]> {
   const result = await payload.find({
     collection: 'users',
     where: { role: { not_equals: 'service' } },
+    pagination: false,
+    depth: 0,
+    sort: 'displayName',
+    overrideAccess: true,
+    select: { displayName: true, role: true },
+  })
+  return result.docs.map((doc) => ({ id: doc.id, name: doc.displayName, role: doc.role }))
+}
+
+/** Joueurs que l'on peut défier depuis son compte : ni soi-même, ni les invités temporaires. */
+export const challengeablePlayers = (players: Player[], meId: string): Player[] =>
+  players.filter((p) => String(p.id) !== meId && p.role !== 'guest')
+
+/** Joueurs qui acceptent les défis d'invités (cochés par l'admin) : seuls visibles sur la page publique. */
+export async function listGuestTargets(payload: Payload): Promise<{ id: User['id']; name: string }[]> {
+  const result = await payload.find({
+    collection: 'users',
+    where: { and: [{ acceptsGuests: { equals: true } }, { role: { in: ['player', 'admin'] } }] },
     pagination: false,
     depth: 0,
     sort: 'displayName',

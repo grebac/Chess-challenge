@@ -124,7 +124,11 @@ export interface UserAuthOperations {
 export interface User {
   id: number;
   displayName: string;
-  role: 'player' | 'admin' | 'service';
+  role: 'player' | 'admin' | 'service' | 'guest';
+  /**
+   * Ce joueur apparaît sur la page publique, où un visiteur peut le défier avec un simple pseudo.
+   */
+  acceptsGuests?: boolean | null;
   updatedAt: string;
   createdAt: string;
   enableAPIKey?: boolean | null;
@@ -254,6 +258,7 @@ export interface PayloadMigration {
 export interface UsersSelect<T extends boolean = true> {
   displayName?: T;
   role?: T;
+  acceptsGuests?: T;
   updatedAt?: T;
   createdAt?: T;
   enableAPIKey?: T;

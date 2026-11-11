@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 
 import { Games } from './collections/Games'
 import { Users } from './collections/Users'
+import { SITE_NAME } from './lib/site'
 import { migrations } from './migrations'
 
 const filename = fileURLToPath(import.meta.url)
@@ -14,6 +15,7 @@ const dirname = path.dirname(filename)
 export default buildConfig({
   admin: {
     user: Users.slug,
+    meta: { titleSuffix: ` – ${SITE_NAME}` },
     importMap: {
       baseDir: path.resolve(dirname),
     },

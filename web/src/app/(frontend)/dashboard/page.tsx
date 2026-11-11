@@ -37,7 +37,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <Header name={user.displayName} isAdmin={isAdmin(user)} />
+      <Header name={user.displayName} isAdmin={isAdmin(user)} guest={user.role === 'guest'} />
       <main className="mx-auto max-w-3xl space-y-10 px-4 py-8">
         <h1 className="text-xl font-semibold">Mes défis et parties</h1>
 

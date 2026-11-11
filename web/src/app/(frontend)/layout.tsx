@@ -1,11 +1,13 @@
 import type { Metadata } from 'next'
 import type { ReactNode } from 'react'
 
+import { SITE_NAME } from '@/lib/site'
+
 import './styles.css'
 
 export const metadata: Metadata = {
-  title: 'Échecs entre collègues',
-  description: 'Parties d’échecs en temps réel contre tes collègues.',
+  title: SITE_NAME,
+  description: 'Parties d’échecs en temps réel entre collègues.',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

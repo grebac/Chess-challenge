@@ -2,7 +2,7 @@ import type { CollectionBeforeChangeHook, CollectionConfig, Where } from 'payloa
 import { APIError } from 'payload'
 
 import type { Game } from '../payload-types'
-import { isPrivileged, relId, relRaw } from '../lib/access'
+import { isGuest, isPrivileged, relId, relRaw } from '../lib/access'
 import { START_FEN, TIME_CONTROLS, parseTimeControl, resolveHostColor } from '../lib/chess'
 
 /**
@@ -55,11 +55,26 @@ const guardChanges: CollectionBeforeChangeHook<Game> = async ({
       limit: 1,
       depth: 0,
       overrideAccess: true,
-      select: { role: true },
+      select: { role: true, acceptsGuests: true },
       req,
     })
     const opponent = found.docs[0]
-    if (!opponent || opponent.role === 'service') throw new APIError('Adversaire introuvable.', 400)
+    // On ne défie jamais un compte de service ni un invité (invisibles dans la liste des joueurs).
+    if (!opponent || (opponent.role !== 'player' && opponent.role !== 'admin')) {
+      throw new APIError('Adversaire introuvable.', 400)
+    }
+
+    if (isGuest(user)) {
+      // Un invité ne peut défier que les joueurs qui l'ont autorisé, et un seul défi à la fois.
+      if (!opponent.acceptsGuests) throw new APIError('Ce joueur n’accepte pas les défis d’invités.', 403)
+      const open = await req.payload.count({
+        collection: 'games',
+        where: { and: [{ host: { equals: user.id } }, { status: { in: ['pending', 'accepted', 'active'] } }] },
+        overrideAccess: true,
+        req,
+      })
+      if (open.totalDocs > 0) throw new APIError('Tu as déjà un défi ou une partie en cours.', 429)
+    }
 
     const timeControl = data.timeControl ?? '10+0'
     const { baseMs } = parseTimeControl(timeControl)

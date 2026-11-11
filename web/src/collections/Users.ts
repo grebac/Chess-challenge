@@ -72,8 +72,24 @@ export const Users: CollectionConfig = {
         { label: 'Joueur', value: 'player' },
         { label: 'Admin', value: 'admin' },
         { label: 'Service (clé API du service realtime)', value: 'service' },
+        { label: 'Invité (compte temporaire créé par la page publique)', value: 'guest' },
       ],
       admin: { position: 'sidebar' },
+    },
+    {
+      name: 'acceptsGuests',
+      label: 'Accepte les défis d’invités',
+      type: 'checkbox',
+      defaultValue: false,
+      // Seul l'admin décide qui peut être défié sans compte ; un joueur ne peut pas se l'attribuer.
+      access: {
+        create: ({ req }) => isAdmin(req.user),
+        update: ({ req }) => isAdmin(req.user),
+      },
+      admin: {
+        position: 'sidebar',
+        description: 'Ce joueur apparaît sur la page publique, où un visiteur peut le défier avec un simple pseudo.',
+      },
     },
   ],
 }

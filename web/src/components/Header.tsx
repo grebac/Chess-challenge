@@ -1,18 +1,22 @@
 import Link from 'next/link'
 
+import { SITE_NAME } from '../lib/site'
 import { LogoutButton } from './LogoutButton'
 
-export function Header({ name, isAdmin }: { name: string; isAdmin: boolean }) {
+/** `guest` : compte invité temporaire (pas de lien Accueil/Admin, il repart de la page publique). */
+export function Header({ name, isAdmin, guest = false }: { name: string; isAdmin: boolean; guest?: boolean }) {
   return (
     <header className="border-b border-stone-800">
       <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
         <Link href="/" className="text-base font-semibold text-amber-400">
-          ♞ Échecs entre collègues
+          ♞ {SITE_NAME}
         </Link>
         <nav className="flex gap-4 text-stone-300">
-          <Link href="/" className="hover:text-white">
-            Accueil
-          </Link>
+          {!guest && (
+            <Link href="/" className="hover:text-white">
+              Accueil
+            </Link>
+          )}
           <Link href="/dashboard" className="hover:text-white">
             Mes défis et parties
           </Link>

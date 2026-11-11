@@ -2,12 +2,15 @@
 
 import { Chess } from 'chess.js'
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chessboard, type PieceDropHandlerArgs } from 'react-chessboard'
 import { io, type Socket } from 'socket.io-client'
 
 import { REASON_LABELS } from '../lib/chess'
 import type { Color, PlayerRef, Snapshot } from '../lib/realtime-types'
+import { buildPgn, checkSquare, lichessAnalysisUrl, replay } from '../lib/replay'
+import { SITE_NAME } from '../lib/site'
+import { playSound, unlockAudioOnFirstGesture } from '../lib/sound'
 
 const ERRORS: Record<string, string> = {
   not_found: 'Partie introuvable.',
@@ -74,6 +77,8 @@ function outcomeText(snap: Snapshot): string {
   return `${winner.name} gagne (${reason})`
 }
 
+const MUTE_KEY = 'chess-muted'
+
 export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
   const socketRef = useRef<Socket | null>(null)
   const [received, setReceived] = useState<{ snap: Snapshot; at: number } | null>(null)
@@ -82,6 +87,11 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
   const [fatal, setFatal] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  // Rembobinage : null = on suit la partie en direct, sinon index de la position revue (0 = départ).
+  const [viewIndex, setViewIndex] = useState<number | null>(null)
+  const [muted, setMuted] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+  const previous = useRef<{ len: number; status: string } | null>(null)
 
   // ---- Connexion Socket.io ------------------------------------------------
   useEffect(() => {
@@ -155,6 +165,57 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
     return () => clearInterval(timer)
   }, [ticking])
 
+  // ---- Son : préférence mémorisée + déblocage au premier geste ------------------
+  useEffect(() => {
+    try {
+      setMuted(window.localStorage.getItem(MUTE_KEY) === '1')
+    } catch {
+      // stockage indisponible (navigation privée) : son activé par défaut
+    }
+    return unlockAudioOnFirstGesture()
+  }, [])
+
+  useEffect(() => {
+    const snap = received?.snap
+    if (!snap) return
+    const before = previous.current
+    previous.current = { len: snap.moves.length, status: snap.status }
+    // Pas de son à l'arrivée sur la page, ni quand le son est coupé.
+    if (!before || muted) return
+    if (snap.status === 'finished' && before.status !== 'finished') return playSound('end')
+    if (snap.moves.length > before.len) {
+      const san = snap.moves.at(-1) ?? ''
+      playSound(san.includes('+') || san.includes('#') ? 'check' : san.includes('x') ? 'capture' : 'move')
+    }
+  }, [received, muted])
+
+  // ---- Rembobinage : positions rejouées + navigation au clavier ------------------
+  const movesKey = received?.snap.moves.join(' ') ?? ''
+  const steps = useMemo(() => replay(movesKey ? movesKey.split(' ') : []), [movesKey])
+  const total = steps.length - 1 // nombre de coups réellement rejouables
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        setViewIndex((i) => Math.max(0, (i ?? total) - 1))
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        setViewIndex((i) => (i === null || i + 1 >= total ? null : i + 1))
+      } else if (event.key === 'Home') {
+        event.preventDefault()
+        setViewIndex(0)
+      } else if (event.key === 'End') {
+        event.preventDefault()
+        setViewIndex(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [total])
+
   if (fatal) {
     return (
       <div className="rounded-lg border border-red-900 bg-red-950/40 p-6">
@@ -178,7 +239,15 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
     return snap.ticking === color ? Math.max(0, base - (now - at)) : base
   }
   const isHost = snap.hostId === meId
-  const canMove = snap.status === 'active' && snap.turn === myColor && pendingFen === null
+
+  // En revue, le plateau montre une position passée : on ne peut pas jouer tant qu'on n'est pas revenu au direct.
+  const viewing = viewIndex !== null && viewIndex < total
+  const reviewed = viewing ? steps[viewIndex]! : null
+  const boardFen = reviewed ? reviewed.fen : (pendingFen ?? snap.fen)
+  const lastMove = reviewed ? reviewed.lastMove : snap.lastMove
+  const exportFen = reviewed ? reviewed.fen : snap.fen
+  const currentIndex = viewing ? viewIndex : total
+  const canMove = snap.status === 'active' && snap.turn === myColor && pendingFen === null && !viewing
 
   function onPieceDrop({ sourceSquare, targetSquare }: PieceDropHandlerArgs): boolean {
     if (!canMove || !targetSquare || !socketRef.current) return false
@@ -214,11 +283,43 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
     })
   }
 
-  const highlight = 'rgba(250, 204, 21, 0.4)'
+  const goTo = (index: number) => setViewIndex(index >= total ? null : Math.max(0, index))
+
+  function toggleMute() {
+    const next = !muted
+    setMuted(next)
+    try {
+      window.localStorage.setItem(MUTE_KEY, next ? '1' : '0')
+    } catch {
+      // préférence non mémorisée : sans conséquence
+    }
+  }
+
+  async function copy(label: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(`${label} copié.`)
+    } catch {
+      setCopied('Copie impossible : ton navigateur la refuse.')
+    }
+    setTimeout(() => setCopied(null), 2500)
+  }
+
+  const copyPgn = () =>
+    copy('PGN', buildPgn({ moves: snap.moves, white: snap.white.name, black: snap.black.name, outcome: snap.outcome, site: SITE_NAME }))
+
+  // Surbrillance : dernier coup en jaune, roi en échec en rouge.
+  const lastMoveStyle = { backgroundColor: 'rgba(250, 204, 21, 0.4)' }
   const squareStyles: Record<string, React.CSSProperties> = {}
-  if (snap.lastMove) {
-    squareStyles[snap.lastMove.from] = { backgroundColor: highlight }
-    squareStyles[snap.lastMove.to] = { backgroundColor: highlight }
+  if (lastMove) {
+    squareStyles[lastMove.from] = lastMoveStyle
+    squareStyles[lastMove.to] = lastMoveStyle
+  }
+  const kingInCheck = checkSquare(boardFen)
+  if (kingInCheck) {
+    squareStyles[kingInCheck] = {
+      background: 'radial-gradient(circle, rgba(239,68,68,0.9) 0%, rgba(239,68,68,0.45) 50%, transparent 75%)',
+    }
   }
 
   const movePairs: { n: number; white: string; black?: string }[] = []
@@ -226,6 +327,17 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
     if (index % 2 === 0) movePairs.push({ n: index / 2 + 1, white: san })
     else movePairs[movePairs.length - 1]!.black = san
   })
+
+  // Fonction (pas un composant) : un composant défini ici serait remonté à chaque tic d'horloge et perdrait des clics.
+  const moveButton = (ply: number, san: string) => (
+    <button
+      key={ply}
+      onClick={() => goTo(ply + 1)}
+      className={`rounded px-1.5 text-left hover:bg-stone-700 ${currentIndex === ply + 1 ? 'bg-amber-500/25 text-amber-200' : ''}`}
+    >
+      {san}
+    </button>
+  )
 
   let banner: { text: string; tone: 'info' | 'good' | 'bad' } | null = null
   if (snap.status === 'finished') {
@@ -239,6 +351,8 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
     }
   }
   const tone = { info: 'border-stone-700 bg-stone-900', good: 'border-emerald-800 bg-emerald-950/50 text-emerald-200', bad: 'border-red-900 bg-red-950/40 text-red-200' }
+  const nav = 'rounded-md border border-stone-700 px-2.5 py-1 text-sm hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40'
+  const small = 'rounded-md border border-stone-700 px-2.5 py-1 text-xs hover:bg-stone-800'
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,640px)_1fr]">
@@ -254,7 +368,7 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
           <Chessboard
             options={{
               id: `game-${gameId}`,
-              position: pendingFen ?? snap.fen,
+              position: boardFen,
               boardOrientation: myColor,
               allowDragging: canMove,
               canDragPiece: ({ piece }) => piece.pieceType.startsWith(myColor === 'white' ? 'w' : 'b'),
@@ -306,20 +420,68 @@ export function GameClient({ gameId, meId }: { gameId: string; meId: string }) {
         {banner && <p className={`rounded-md border px-3 py-2 text-sm font-medium ${tone[banner.tone]}`}>{banner.text}</p>}
         {message && <p className="text-sm text-red-400">{message}</p>}
 
+        {viewing && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-sky-800 bg-sky-950/40 px-3 py-2 text-sm text-sky-200">
+            <span>
+              Position revue après {viewIndex} coup{viewIndex === 1 ? '' : 's'}
+              {snap.status === 'active' ? ' : la partie continue en direct.' : '.'}
+            </span>
+            <button onClick={() => setViewIndex(null)} className="shrink-0 rounded-md border border-sky-700 px-2 py-1 text-xs hover:bg-sky-900/60">
+              Retour au direct
+            </button>
+          </div>
+        )}
+
         <div className="rounded-lg border border-stone-800 bg-stone-900/60 p-4">
-          <h2 className="mb-2 text-sm font-semibold text-stone-300">Coups</h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-stone-300">Coups</h2>
+            <div className="flex gap-1.5" role="group" aria-label="Rembobiner la partie">
+              <button className={nav} onClick={() => setViewIndex(0)} disabled={total === 0 || currentIndex === 0} title="Début de la partie (Home)" aria-label="Début de la partie">
+                ⏮
+              </button>
+              <button className={nav} onClick={() => goTo(currentIndex - 1)} disabled={currentIndex === 0} title="Coup précédent (←)" aria-label="Coup précédent">
+                ◀
+              </button>
+              <button className={nav} onClick={() => goTo(currentIndex + 1)} disabled={!viewing} title="Coup suivant (→)" aria-label="Coup suivant">
+                ▶
+              </button>
+              <button className={nav} onClick={() => setViewIndex(null)} disabled={!viewing} title="Retour au direct (Fin)" aria-label="Retour au direct">
+                ⏭
+              </button>
+            </div>
+          </div>
           {movePairs.length === 0 ? (
             <p className="text-sm text-stone-500">Aucun coup joué.</p>
           ) : (
-            <ol className="grid max-h-72 grid-cols-[auto_1fr_1fr] gap-x-4 gap-y-1 overflow-y-auto font-mono text-sm">
-              {movePairs.map((pair) => (
+            <ol className="grid max-h-72 grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-1 overflow-y-auto font-mono text-sm">
+              {movePairs.map((pair, i) => (
                 <li key={pair.n} className="contents">
                   <span className="text-stone-500">{pair.n}.</span>
-                  <span>{pair.white}</span>
-                  <span>{pair.black ?? ''}</span>
+                  {moveButton(i * 2, pair.white)}
+                  {pair.black ? moveButton(i * 2 + 1, pair.black) : <span />}
                 </li>
               ))}
             </ol>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-stone-800 pt-3">
+            <button className={small} onClick={() => copy('FEN', exportFen)} title={viewing ? 'FEN de la position revue' : 'FEN de la position actuelle'}>
+              Copier le FEN
+            </button>
+            <button className={small} onClick={copyPgn}>
+              Copier le PGN
+            </button>
+            <a className={small} href={lichessAnalysisUrl(exportFen)} target="_blank" rel="noopener noreferrer">
+              Analyser sur Lichess ↗
+            </a>
+            <button className={`${small} ml-auto`} onClick={toggleMute} aria-pressed={muted}>
+              {muted ? '🔇 Son coupé' : '🔊 Son activé'}
+            </button>
+          </div>
+          {copied && (
+            <p className="mt-2 text-xs text-emerald-400" role="status">
+              {copied}
+            </p>
           )}
         </div>
 

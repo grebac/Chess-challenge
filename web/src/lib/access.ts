@@ -1,8 +1,9 @@
-// Rôles : player (défaut), admin, service (clé API utilisée par le service realtime).
-type WithRole = { role?: 'player' | 'admin' | 'service' | null } | null | undefined
+// Rôles : player (défaut), admin, service (clé API du service realtime), guest (compte invité temporaire).
+type WithRole = { role?: 'player' | 'admin' | 'service' | 'guest' | null } | null | undefined
 
 export const isAdmin = (user: WithRole): boolean => user?.role === 'admin'
 export const isService = (user: WithRole): boolean => user?.role === 'service'
+export const isGuest = (user: WithRole): boolean => user?.role === 'guest'
 export const isPrivileged = (user: WithRole): boolean => isAdmin(user) || isService(user)
 
 /** Valeur brute d'une relation (id ou document peuplé) -> id d'origine. */
